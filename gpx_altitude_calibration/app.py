@@ -168,11 +168,6 @@ def index():
     return render_template("index.html")
 
 
-@app.route("/help")
-def help_page():
-    return render_template("help.html")
-
-
 @app.route("/analyze", methods=["POST"])
 def analyze():
     files = request.files.getlist("gpx")
