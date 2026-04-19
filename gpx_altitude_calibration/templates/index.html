@@ -115,6 +115,34 @@ input[type="file"] { display: none; }
 #ann-layer-btn.active { background: #9e9e9e; color: #fff; border-color: #9e9e9e; }
 #gradient-btn.active { background: #ff6f00; color: #fff; border-color: #ff6f00; }
 #climb-btn.active { background: #6a1b9a; color: #fff; border-color: #6a1b9a; }
+#time-btn.active { background: #00695c; color: #fff; border-color: #00695c; }
+#time-settings {
+  display: none; align-items: center; gap: 8px;
+  padding: 4px 12px; background: #e8f5e9; border-bottom: 1px solid #c8e6c9;
+  font-size: 12px; flex-shrink: 0; flex-wrap: wrap;
+}
+#time-settings.visible { display: flex; }
+#time-settings label { color: #444; white-space: nowrap; }
+#time-settings input[type="date"],
+#time-settings input[type="time"],
+#time-settings input[type="number"] {
+  border: 1px solid #aed581; border-radius: 4px; padding: 2px 6px;
+  font-size: 12px; background: #fff;
+}
+#time-settings input[type="number"] { width: 60px; }
+#time-calc-btn {
+  background: #2e7d32; color: #fff; border: none;
+  padding: 4px 10px; border-radius: 4px; font-size: 12px;
+  cursor: pointer; white-space: nowrap;
+}
+#time-calc-btn:hover { background: #1b5e20; }
+#time-legend {
+  display: none; align-items: center; gap: 6px; font-size: 10px; flex-shrink: 0;
+}
+#time-legend.visible { display: flex; }
+.tl-item { display: flex; align-items: center; gap: 2px; color: #555; white-space: nowrap; }
+.tl-swatch { width: 12px; height: 8px; border-radius: 2px; flex-shrink: 0; }
+#time-eta { font-size: 11px; color: #2e7d32; font-weight: 600; white-space: nowrap; }
 #climb-section {
   display: none; flex-shrink: 0;
   height: 90px; overflow-y: auto; background: #fafafa; border-top: 1px solid #eee;
@@ -360,6 +388,26 @@ input[type="file"] { display: none; }
 
 <div id="resize-handle"></div>
 
+<div id="time-settings">
+  <label>出発日時:
+    <input type="date" id="time-date">
+    <input type="time" id="time-clock" value="06:00">
+  </label>
+  <label>モード:
+    <select id="time-mode" style="font-size:12px;border:1px solid #aed581;border-radius:4px;padding:2px 4px;">
+      <option value="simple">簡易（平均速度）</option>
+      <option value="gradient">勾配考慮</option>
+    </select>
+  </label>
+  <label id="time-speed-label">平均速度:
+    <input type="number" id="time-speed" value="18" min="1" max="80"> km/h
+  </label>
+  <label id="time-flat-label" style="display:none">平坦速度:
+    <input type="number" id="time-flat" value="22" min="1" max="80"> km/h
+  </label>
+  <button id="time-calc-btn" onclick="calcTimeBand()">計算</button>
+</div>
+
 <div id="bottom">
   <div id="legend-bar">
     <strong>標高プロファイル</strong>
@@ -387,6 +435,14 @@ input[type="file"] { display: none; }
     <button class="sm-btn" id="ann-layer-btn" onclick="toggleAnnotationLayers()" title="アノテーション表示のオン/オフ">🟢 アノテーション</button>
     <button class="sm-btn" id="gradient-btn" onclick="toggleGradient()" title="勾配をマップ・グラフに表示">📐 勾配</button>
     <button class="sm-btn" id="climb-btn" onclick="toggleClimbs()" title="登坂区間のキツさ指数を表示">🏔 峠</button>
+    <button class="sm-btn" id="time-btn" onclick="toggleTimeMode()" title="時間帯可視化">🕐 時間帯</button>
+    <div id="time-legend">
+      <span style="font-size:10px;font-weight:600;color:#555">時間帯:</span>
+      <div class="tl-item"><div class="tl-swatch" style="background:#ffb300"></div>日中</div>
+      <div class="tl-item"><div class="tl-swatch" style="background:#e64a19"></div>薄明</div>
+      <div class="tl-item"><div class="tl-swatch" style="background:#283593"></div>夜間</div>
+    </div>
+    <span id="time-eta"></span>
   </div>
 
   <div id="chart-wrap">
@@ -536,6 +592,7 @@ input[type="file"] { display: none; }
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/suncalc@1.9.0/suncalc.min.js"></script>
 <script>
 'use strict';
 
@@ -563,6 +620,8 @@ let chartHoverDist      = null;
 let climbVisible        = false;
 let climbLayers         = [];
 let climbSegments       = [];
+let timeVisible         = false;
+let timeLayers          = [];
 
 let map, chart;
 let routeLayer    = null;
@@ -1142,7 +1201,8 @@ function addMapHoverEvents(d) {
     tip.style.top     = (e.originalEvent.clientY - mr.top  - 32) + 'px';
     tip.style.display = 'block';
     const gradTxt = gradientData ? `  /  ${gradientData[bestIdx].toFixed(1)}%` : '';
-    tip.textContent   = `${best.distance.toFixed(2)} km  /  ${best.ele_terrain.toFixed(0)} m${gradTxt}`;
+    const timeTxt = window._passTimes ? `  /  ${fmtTime(window._passTimes[bestIdx])}` : '';
+    tip.textContent   = `${best.distance.toFixed(2)} km  /  ${best.ele_terrain.toFixed(0)} m${gradTxt}${timeTxt}`;
   });
 
   hitLayer.on('mouseout', () => {
@@ -1296,6 +1356,101 @@ function toggleClimbs() {
     climbLayers.forEach(l => map.removeLayer(l));
     climbLayers = [];
   }
+}
+
+// ── Time band visualization ──────────────────────────────────────
+function toggleTimeMode() {
+  timeVisible = !timeVisible;
+  document.getElementById('time-btn').classList.toggle('active', timeVisible);
+  document.getElementById('time-settings').classList.toggle('visible', timeVisible);
+  document.getElementById('time-legend').classList.toggle('visible', timeVisible);
+  if (!timeVisible) {
+    timeLayers.forEach(l => map.removeLayer(l));
+    timeLayers = [];
+    document.getElementById('time-eta').textContent = '';
+  }
+  // モード切替でラベル表示を連動
+  document.getElementById('time-mode').onchange = () => {
+    const isGrad = document.getElementById('time-mode').value === 'gradient';
+    document.getElementById('time-speed-label').style.display = isGrad ? 'none' : '';
+    document.getElementById('time-flat-label').style.display  = isGrad ? '' : 'none';
+  };
+  // デフォルト日付を今日に
+  if (!document.getElementById('time-date').value) {
+    document.getElementById('time-date').value = new Date().toISOString().slice(0, 10);
+  }
+}
+
+function pointSpeed(gradPct, mode, vFlat) {
+  if (mode === 'simple') return vFlat;
+  if (gradPct >= 0) return vFlat / (1 + 0.08 * gradPct);
+  return Math.min(vFlat * (1 + 0.04 * Math.abs(gradPct)), 50);
+}
+
+function timeBandColor(date, lat, lon) {
+  const times = SunCalc.getTimes(date, lat, lon);
+  const t = date.getTime();
+  if (t >= times.sunrise.getTime() && t <= times.sunset.getTime())   return '#ffb300'; // 日中
+  if (t >= times.dawn.getTime()    && t < times.sunrise.getTime())   return '#e64a19'; // 夜明け薄明
+  if (t > times.sunset.getTime()   && t <= times.dusk.getTime())     return '#e64a19'; // 夕暮れ薄明
+  return '#283593'; // 夜間
+}
+
+function fmtTime(date) {
+  return date.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
+}
+
+function calcTimeBand() {
+  if (!analysisData) { alert('まずGPXを解析してください'); return; }
+  const dateStr  = document.getElementById('time-date').value;
+  const timeStr  = document.getElementById('time-clock').value;
+  const mode     = document.getElementById('time-mode').value;
+  const vFlat    = parseFloat(mode === 'gradient'
+    ? document.getElementById('time-flat').value
+    : document.getElementById('time-speed').value);
+  if (!dateStr || !timeStr || isNaN(vFlat) || vFlat <= 0) { alert('出発日時と速度を入力してください'); return; }
+
+  const departMs = new Date(`${dateStr}T${timeStr}`).getTime();
+  const pts      = analysisData.points;
+  const grads    = gradientData || new Array(pts.length).fill(0);
+
+  // 各ポイントの通過時刻を計算
+  const passTimes = [new Date(departMs)];
+  for (let i = 1; i < pts.length; i++) {
+    const segKm  = pts[i].distance - pts[i - 1].distance;
+    const v      = pointSpeed(grads[i], mode, vFlat); // km/h
+    const ms     = segKm / v * 3600 * 1000;
+    passTimes.push(new Date(passTimes[i - 1].getTime() + ms));
+  }
+
+  // マップ描画
+  timeLayers.forEach(l => map.removeLayer(l));
+  timeLayers = [];
+  let segStart = 0;
+  let curColor = timeBandColor(passTimes[0], pts[0].lat, pts[0].lon);
+  for (let i = 1; i <= pts.length; i++) {
+    const nextColor = i < pts.length ? timeBandColor(passTimes[i], pts[i].lat, pts[i].lon) : null;
+    if (nextColor !== curColor || i === pts.length) {
+      const end = i < pts.length ? i + 1 : i;
+      const seg = pts.slice(segStart, end).map(p => [p.lat, p.lon]);
+      if (seg.length >= 2) {
+        timeLayers.push(
+          L.polyline(seg, { color: curColor, weight: 5, opacity: 0.9, interactive: false }).addTo(map)
+        );
+      }
+      segStart = i - 1;
+      curColor = nextColor;
+    }
+  }
+
+  // 到着時刻表示
+  const arrival = passTimes[pts.length - 1];
+  const totalH  = Math.round((arrival.getTime() - departMs) / 60000);
+  document.getElementById('time-eta').textContent =
+    `到着 ${fmtTime(arrival)}（所要 ${Math.floor(totalH/60)}時間${totalH%60}分）`;
+
+  // マップホバーに通過時刻を追加（グローバルに保持）
+  window._passTimes = passTimes;
 }
 
 // ── Gradient visualization ───────────────────────────────────────
