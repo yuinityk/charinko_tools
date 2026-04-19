@@ -112,6 +112,12 @@ input[type="file"] { display: none; }
   flex-shrink: 0; line-height: 1;
 }
 #help-btn:hover { background: rgba(255,255,255,.32); }
+#ann-layer-btn.active { background: #9e9e9e; color: #fff; border-color: #9e9e9e; }
+#gradient-btn.active { background: #ff6f00; color: #fff; border-color: #ff6f00; }
+#gradient-legend { display: none; align-items: center; gap: 5px; margin-right: 2px; flex-shrink: 0; }
+#gradient-legend.visible { display: flex; }
+.gl-item { display: flex; align-items: center; gap: 2px; font-size: 10px; color: #555; white-space: nowrap; }
+.gl-swatch { width: 12px; height: 8px; border-radius: 2px; flex-shrink: 0; }
 #status {
   font-size: 11px; opacity: .8; margin-left: auto;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 420px;
@@ -258,6 +264,16 @@ input[type="file"] { display: none; }
     <div class="li"><span class="sw-line corrected"></span>アノテーション補正後</div>
     <div class="li"><span class="sw-band manual"></span>手動アノテーション</div>
     <span id="ann-hint">← グラフをドラッグ / 端をドラッグして調整</span>
+    <div id="gradient-legend">
+      <span style="font-size:10px;font-weight:600;color:#555">勾配:</span>
+      <div class="gl-item"><div class="gl-swatch" style="background:#c62828"></div>≥12%</div>
+      <div class="gl-item"><div class="gl-swatch" style="background:#e53935"></div>9-12</div>
+      <div class="gl-item"><div class="gl-swatch" style="background:#fb8c00"></div>6-9</div>
+      <div class="gl-item"><div class="gl-swatch" style="background:#fdd835"></div>3-6</div>
+      <div class="gl-item"><div class="gl-swatch" style="background:#7cb342"></div>0-3</div>
+      <div class="gl-item"><div class="gl-swatch" style="background:#90caf9"></div>0〜-3</div>
+      <div class="gl-item"><div class="gl-swatch" style="background:#1565c0"></div>&lt;-3%</div>
+    </div>
     <div class="spacer"></div>
     <div id="elev-stats" class="hidden">
       <span class="gain">↑ <span id="stat-gain">—</span> m</span>
@@ -265,6 +281,8 @@ input[type="file"] { display: none; }
     </div>
     <button class="sm-btn" onclick="resetZoom()" title="ダブルクリックでもリセット">🔍 ズームリセット</button>
     <button class="sm-btn" onclick="clearAnnotations()">🗑 全削除</button>
+    <button class="sm-btn" id="ann-layer-btn" onclick="toggleAnnotationLayers()" title="アノテーション表示のオン/オフ">🟢 アノテーション</button>
+    <button class="sm-btn" id="gradient-btn" onclick="toggleGradient()" title="勾配をマップ・グラフに表示">📐 勾配</button>
   </div>
 
   <div id="chart-wrap">
@@ -333,6 +351,11 @@ let panState       = null;   // {startClientX, startZoomMin, startZoomMax, dataR
 let mapHoverDist   = null;
 let xZoomMin       = null;
 let xZoomMax       = null;
+let gradientVisible     = false;
+let gradientLayer       = null;
+let gradientData        = null;
+let annotLayersVisible  = true;
+let chartHoverDist      = null;
 
 let map, chart;
 let routeLayer    = null;
@@ -394,7 +417,7 @@ const gpxPlugin = {
     if (!ca) return;
 
     // Manual annotation bands (green)
-    annotations.forEach(ann =>
+    if (annotLayersVisible) annotations.forEach(ann =>
       drawBand(ctx, ca, scales, ann.start, ann.end,
         'rgba(76,175,80,.2)', 'rgba(76,175,80,.85)')
     );
@@ -419,13 +442,25 @@ const gpxPlugin = {
     if (!ca) return;
 
     // Edge handles (annotation mode only)
-    if (annotationMode) {
+    if (annotationMode && annotLayersVisible) {
       annotations.forEach(ann => {
         [ann.start, ann.end].forEach(d => {
           const px = scales.x.getPixelForValue(d);
           if (px >= ca.left && px <= ca.right) drawEdgeHandle(ctx, px, ca.top, ca.bottom);
         });
       });
+    }
+
+    // Chart-hover crosshair
+    if (chartHoverDist !== null) {
+      const x = scales.x.getPixelForValue(chartHoverDist);
+      if (x >= ca.left && x <= ca.right) {
+        ctx.save();
+        ctx.strokeStyle = '#555'; ctx.lineWidth = 1; ctx.setLineDash([3, 3]);
+        ctx.beginPath(); ctx.moveTo(x, ca.top); ctx.lineTo(x, ca.bottom); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.restore();
+      }
     }
 
     // Map-hover crosshair
@@ -516,6 +551,13 @@ function buildChart(points) {
           borderColor: '#1565c0', borderWidth: 2,
           pointRadius: 0, fill: false, tension: 0.15,
         },
+        {
+          label: '勾配 (%)',
+          data: computeGradients(points, corrected).map((g, i) => ({ x: points[i].distance, y: Math.round(g * 10) / 10 })),
+          borderColor: '#ff6f00', borderWidth: 1.5,
+          pointRadius: 0, fill: false, tension: 0.3,
+          yAxisID: 'y2', hidden: !gradientVisible,
+        },
       ],
     },
     options: {
@@ -540,6 +582,13 @@ function buildChart(points) {
           title: { display: true, text: '標高 (m)', font: { size: 11 } },
           ticks: { font: { size: 10 } },
         },
+        y2: {
+          display: gradientVisible,
+          position: 'right',
+          title: { display: true, text: '勾配 (%)', font: { size: 11 } },
+          ticks: { font: { size: 10 }, callback: v => v.toFixed(0) + '%' },
+          grid: { drawOnChartArea: false },
+        },
       },
     },
   });
@@ -552,8 +601,16 @@ function updateCorrectedLine() {
   chart.data.datasets[1].data = analysisData.points.map((p, i) => ({
     x: p.distance, y: corrected[i],
   }));
+  chart.data.datasets[2].data = computeGradients(analysisData.points, corrected).map((g, i) => ({
+    x: analysisData.points[i].distance, y: Math.round(g * 10) / 10,
+  }));
+  gradientData = computeGradients(analysisData.points, corrected);
   chart.update('none');
   updateElevStats(corrected);
+  if (gradientVisible) {
+    renderGradientMap(analysisData.points);
+    gradientLayer.addTo(map);
+  }
 }
 
 function smoothElevs(arr, half) {
@@ -814,6 +871,7 @@ function updateAnnotationMapLayers() {
   annotLayers.forEach(l => map.removeLayer(l));
   annotLayers = [];
   if (!analysisData) return;
+  if (!annotLayersVisible) return;
   annotations.forEach((ann, i) => {
     const pts = analysisData.points
       .filter(p => p.distance >= ann.start - 0.001 && p.distance <= ann.end + 0.001)
@@ -849,6 +907,10 @@ function renderMap(d) {
   ];
 
   addMapHoverEvents(d);
+  if (gradientVisible) {
+    renderGradientMap(d.points);
+    gradientLayer.addTo(map);
+  }
 }
 
 // ── Map hover → chart crosshair ──────────────────────────────────
@@ -858,10 +920,11 @@ function addMapHoverEvents(d) {
 
   hitLayer.on('mousemove', e => {
     const { lat, lng } = e.latlng;
-    let best = null, bestD2 = Infinity;
-    for (const p of d.points) {
+    let best = null, bestIdx = 0, bestD2 = Infinity;
+    for (let i = 0; i < d.points.length; i++) {
+      const p = d.points[i];
       const d2 = (p.lat - lat) ** 2 + (p.lon - lng) ** 2;
-      if (d2 < bestD2) { bestD2 = d2; best = p; }
+      if (d2 < bestD2) { bestD2 = d2; best = p; bestIdx = i; }
     }
     if (!best) return;
     mapHoverDist = best.distance;
@@ -871,7 +934,8 @@ function addMapHoverEvents(d) {
     tip.style.left    = (e.originalEvent.clientX - mr.left + 14) + 'px';
     tip.style.top     = (e.originalEvent.clientY - mr.top  - 32) + 'px';
     tip.style.display = 'block';
-    tip.textContent   = `${best.distance.toFixed(2)} km  /  ${best.ele_terrain.toFixed(0)} m`;
+    const gradTxt = gradientData ? `  /  ${gradientData[bestIdx].toFixed(1)}%` : '';
+    tip.textContent   = `${best.distance.toFixed(2)} km  /  ${best.ele_terrain.toFixed(0)} m${gradTxt}`;
   });
 
   hitLayer.on('mouseout', () => {
@@ -879,6 +943,82 @@ function addMapHoverEvents(d) {
     if (chart) chart.update('none');
     tip.style.display = 'none';
   });
+}
+
+// ── Annotation layer visibility toggle ──────────────────────────
+function toggleAnnotationLayers() {
+  annotLayersVisible = !annotLayersVisible;
+  document.getElementById('ann-layer-btn').classList.toggle('active', !annotLayersVisible);
+  updateAnnotationMapLayers();
+  if (chart) chart.update('none');
+}
+
+// ── Gradient visualization ───────────────────────────────────────
+function gradientColor(pct) {
+  if (pct >= 12) return '#c62828';
+  if (pct >= 9)  return '#e53935';
+  if (pct >= 6)  return '#fb8c00';
+  if (pct >= 3)  return '#fdd835';
+  if (pct >= 0)  return '#7cb342';
+  if (pct >= -3) return '#90caf9';
+  if (pct >= -6) return '#1e88e5';
+  return '#1565c0';
+}
+
+function computeGradients(points, correctedEles) {
+  if (points.length < 2) return new Array(points.length).fill(0);
+  // トンネル補正後の標高を使う（地形標高だとトンネル出入口でスパイクが出る）
+  const WINDOW_KM = 0.3; // 前後300m窓（計600m）で計算
+  const raw  = correctedEles || points.map(p => p.ele_terrain);
+  const eles = smoothElevs(raw, 15); // 31点移動平均で先にノイズ除去
+  const grads = new Array(points.length).fill(0);
+  for (let i = 0; i < points.length; i++) {
+    let lo = i, hi = i;
+    while (lo > 0 && points[i].distance - points[lo].distance < WINDOW_KM / 2) lo--;
+    while (hi < points.length - 1 && points[hi].distance - points[i].distance < WINDOW_KM / 2) hi++;
+    const dDist = (points[hi].distance - points[lo].distance) * 1000;
+    if (dDist > 0) grads[i] = (eles[hi] - eles[lo]) / dDist * 100;
+  }
+  return smoothElevs(grads, 5);
+}
+
+function renderGradientMap(points) {
+  if (gradientLayer) { map.removeLayer(gradientLayer); gradientLayer = null; }
+  const corrected = analysisData ? computeCorrected(points, annotations) : null;
+  const grads = computeGradients(points, corrected);
+  const group = L.layerGroup();
+  let segStart = 0;
+  let curColor = gradientColor(grads[0]);
+  for (let i = 1; i <= points.length; i++) {
+    const nextColor = i < points.length ? gradientColor(grads[i]) : null;
+    if (nextColor !== curColor || i === points.length) {
+      const end = i < points.length ? i + 1 : i;
+      const seg = points.slice(segStart, end).map(p => [p.lat, p.lon]);
+      if (seg.length >= 2) {
+        L.polyline(seg, { color: curColor, weight: 5, opacity: 0.9, interactive: false }).addTo(group);
+      }
+      segStart = i - 1;
+      curColor = nextColor;
+    }
+  }
+  gradientLayer = group;
+}
+
+function toggleGradient() {
+  gradientVisible = !gradientVisible;
+  document.getElementById('gradient-btn').classList.toggle('active', gradientVisible);
+  document.getElementById('gradient-legend').classList.toggle('visible', gradientVisible);
+  if (gradientVisible && analysisData) {
+    renderGradientMap(analysisData.points);
+    gradientLayer.addTo(map);
+  } else if (!gradientVisible && gradientLayer) {
+    map.removeLayer(gradientLayer);
+  }
+  if (chart) {
+    chart.data.datasets[2].hidden = !gradientVisible;
+    chart.options.scales.y2.display = gradientVisible;
+    chart.update('none');
+  }
 }
 
 // ── Resize handles ───────────────────────────────────────────────
@@ -1035,6 +1175,7 @@ async function doAnalyze() {
     renderMap(json);
     buildChart(json.points);
     await loadAnnotations();
+    gradientData = computeGradients(json.points, computeCorrected(json.points, annotations));
 
     document.getElementById('save-btn').disabled   = false;
     document.getElementById('export-btn').disabled = false;
@@ -1139,9 +1280,12 @@ async function exportGPX() {
     const ca   = chart.chartArea;
     const rect = document.getElementById('elevation-chart').getBoundingClientRect();
     const x    = e.clientX - rect.left;
-    if (x < ca.left || x > ca.right) { hideCursorMarker(); return; }
+    if (x < ca.left || x > ca.right) { hideCursorMarker(); chartHoverDist = null; chart.update('none'); return; }
 
     const dist = chart.scales.x.getValueForPixel(x);
+    chartHoverDist = dist;
+    chart.update('none');
+
     const pts  = analysisData.points;
     let lo = 0, hi = pts.length - 1;
     while (lo < hi - 1) {
@@ -1152,7 +1296,11 @@ async function exportGPX() {
     moveCursorToIndex(idx);
   });
 
-  wrap.addEventListener('mouseleave', hideCursorMarker);
+  wrap.addEventListener('mouseleave', () => {
+    chartHoverDist = null;
+    if (chart) chart.update('none');
+    hideCursorMarker();
+  });
 })();
 
 function hideCursorMarker() {
