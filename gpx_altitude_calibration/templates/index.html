@@ -114,6 +114,17 @@ input[type="file"] { display: none; }
 #help-btn:hover { background: rgba(255,255,255,.32); }
 #ann-layer-btn.active { background: #9e9e9e; color: #fff; border-color: #9e9e9e; }
 #gradient-btn.active { background: #ff6f00; color: #fff; border-color: #ff6f00; }
+#climb-btn.active { background: #6a1b9a; color: #fff; border-color: #6a1b9a; }
+#climb-section {
+  display: none; flex-shrink: 0;
+  height: 90px; overflow-y: auto; background: #fafafa; border-top: 1px solid #eee;
+}
+#climb-section.visible { display: block; }
+#climb-section table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+#climb-section th, #climb-section td { padding: 3px 10px; text-align: left; border-bottom: 1px solid #eee; }
+#climb-section th { background: #f0f2f5; font-weight: 600; color: #555; position: sticky; top: 0; }
+#climb-section tr:hover td { background: #f5f0ff; cursor: pointer; }
+#climb-empty { font-size: 12px; color: #aaa; text-align: center; padding: 8px; }
 #gradient-legend { display: none; align-items: center; gap: 5px; margin-right: 2px; flex-shrink: 0; }
 #gradient-legend.visible { display: flex; }
 .gl-item { display: flex; align-items: center; gap: 2px; font-size: 10px; color: #555; white-space: nowrap; }
@@ -375,6 +386,7 @@ input[type="file"] { display: none; }
     <button class="sm-btn" onclick="clearAnnotations()">🗑 全削除</button>
     <button class="sm-btn" id="ann-layer-btn" onclick="toggleAnnotationLayers()" title="アノテーション表示のオン/オフ">🟢 アノテーション</button>
     <button class="sm-btn" id="gradient-btn" onclick="toggleGradient()" title="勾配をマップ・グラフに表示">📐 勾配</button>
+    <button class="sm-btn" id="climb-btn" onclick="toggleClimbs()" title="登坂区間のキツさ指数を表示">🏔 峠</button>
   </div>
 
   <div id="chart-wrap">
@@ -392,6 +404,16 @@ input[type="file"] { display: none; }
       <tbody id="ann-rows"></tbody>
     </table>
     <div id="ann-empty">アノテーションなし — アノテーションモードでグラフをドラッグして追加</div>
+  </div>
+
+  <div id="climb-section">
+    <table>
+      <thead>
+        <tr><th>#</th><th>開始 (km)</th><th>終了 (km)</th><th>距離 (m)</th><th>獲得標高 (m)</th><th>平均勾配</th><th>キツさ指数</th></tr>
+      </thead>
+      <tbody id="climb-rows"></tbody>
+    </table>
+    <div id="climb-empty">解析後に「🏔 峠」ボタンを押すと登坂区間を検出します</div>
   </div>
 </div>
 
@@ -538,6 +560,9 @@ let gradientLayer       = null;
 let gradientData        = null;
 let annotLayersVisible  = true;
 let chartHoverDist      = null;
+let climbVisible        = false;
+let climbLayers         = [];
+let climbSegments       = [];
 
 let map, chart;
 let routeLayer    = null;
@@ -1133,6 +1158,144 @@ function toggleAnnotationLayers() {
   document.getElementById('ann-layer-btn').classList.toggle('active', !annotLayersVisible);
   updateAnnotationMapLayers();
   if (chart) chart.update('none');
+}
+
+// ── Climb difficulty ─────────────────────────────────────────────
+const BIN_M       = 100;  // ビン幅 (m)
+const MIN_GRAD    = 1.5;  // 登坂とみなす最低勾配 (%)
+const MIN_LEN_M   = 500;  // 最低区間長 (m)
+const GAP_TOL_M   = 200;  // 緩区間を無視する許容距離 (m)
+
+function buildBins(points, corrected) {
+  const bins = [];
+  let k = 0;
+  while (k < points.length - 1) {
+    const startDist = points[k].distance;
+    let j = k + 1;
+    while (j < points.length - 1 && (points[j].distance - startDist) * 1000 < BIN_M) j++;
+    const dDist = (points[j].distance - points[k].distance) * 1000;
+    const dEle  = corrected[j] - corrected[k];
+    bins.push({ startKm: points[k].distance, endKm: points[j].distance,
+                startIdx: k, endIdx: j,
+                grad: dDist > 0 ? dEle / dDist * 100 : 0 });
+    k = j;
+  }
+  return bins;
+}
+
+function detectClimbs(points, corrected) {
+  const bins = buildBins(points, corrected);
+  const segs = [];
+  let segStart = null, gapBins = 0;
+
+  const flush = (endK) => {
+    const b0 = bins[segStart], bN = bins[endK];
+    const lengthM = (bN.endKm - b0.startKm) * 1000;
+    if (lengthM < MIN_LEN_M) return;
+    let difficulty = 0, elevGain = 0;
+    for (let k = segStart; k <= endK; k++) {
+      const g = Math.max(bins[k].grad, 0);
+      difficulty += g * g * BIN_M;
+      elevGain   += g / 100 * BIN_M;
+    }
+    difficulty /= 10000;
+    const avgGrad = elevGain / lengthM * 100;
+    segs.push({
+      startKm:   Math.round(b0.startKm * 1000) / 1000,
+      endKm:     Math.round(bN.endKm   * 1000) / 1000,
+      startIdx:  b0.startIdx,
+      lengthM:   Math.round(lengthM),
+      elevGain:  Math.round(elevGain),
+      avgGrad:   Math.round(avgGrad * 10) / 10,
+      difficulty: Math.round(difficulty * 10) / 10,
+    });
+  };
+
+  for (let k = 0; k < bins.length; k++) {
+    if (bins[k].grad >= MIN_GRAD) {
+      if (segStart === null) segStart = k;
+      gapBins = 0;
+    } else if (segStart !== null) {
+      gapBins++;
+      if (gapBins * BIN_M > GAP_TOL_M) {
+        flush(k - gapBins);
+        segStart = null; gapBins = 0;
+      }
+    }
+  }
+  if (segStart !== null) flush(bins.length - 1);
+  return segs;
+}
+
+function climbColor(difficulty) {
+  if (difficulty >= 30) return '#6a1b9a';
+  if (difficulty >= 15) return '#c62828';
+  if (difficulty >= 5)  return '#ef6c00';
+  return '#f9a825';
+}
+
+function renderClimbMap(segs) {
+  climbLayers.forEach(l => map.removeLayer(l));
+  climbLayers = [];
+  if (!analysisData) return;
+  segs.forEach((seg, i) => {
+    // 区間をマップ上に描画
+    const pts = analysisData.points
+      .filter(p => p.distance >= seg.startKm - 0.001 && p.distance <= seg.endKm + 0.001)
+      .map(p => [p.lat, p.lon]);
+    if (pts.length >= 2) {
+      const line = L.polyline(pts, { color: climbColor(seg.difficulty), weight: 6, opacity: 0.85, interactive: false });
+      climbLayers.push(line.addTo(map));
+    }
+    // 開始点マーカー
+    const p = analysisData.points[seg.startIdx];
+    const marker = L.circleMarker([p.lat, p.lon], {
+      radius: 10, color: '#fff', fillColor: climbColor(seg.difficulty),
+      fillOpacity: 1, weight: 2,
+    }).bindTooltip(`#${i+1} キツさ: ${seg.difficulty}`, { permanent: false });
+    climbLayers.push(marker.addTo(map));
+  });
+}
+
+function renderClimbSection(segs) {
+  const tbody = document.getElementById('climb-rows');
+  const empty = document.getElementById('climb-empty');
+  tbody.innerHTML = '';
+  if (!segs.length) { empty.style.display = 'block'; return; }
+  empty.style.display = 'none';
+  segs.forEach((seg, i) => {
+    const tr = document.createElement('tr');
+    const col = climbColor(seg.difficulty);
+    tr.innerHTML = `
+      <td>${i + 1}</td>
+      <td>${seg.startKm.toFixed(1)}</td>
+      <td>${seg.endKm.toFixed(1)}</td>
+      <td>${seg.lengthM.toLocaleString()}</td>
+      <td>${seg.elevGain}</td>
+      <td>${seg.avgGrad.toFixed(1)}%</td>
+      <td><strong style="color:${col}">${seg.difficulty}</strong></td>`;
+    tr.addEventListener('click', () => {
+      const p = analysisData.points[seg.startIdx];
+      map.setView([p.lat, p.lon], 13);
+      setZoom(seg.startKm - 0.5, seg.endKm + 0.5);
+    });
+    tbody.appendChild(tr);
+  });
+}
+
+function toggleClimbs() {
+  climbVisible = !climbVisible;
+  document.getElementById('climb-btn').classList.toggle('active', climbVisible);
+  document.getElementById('climb-section').classList.toggle('visible', climbVisible);
+  if (climbVisible && analysisData) {
+    const corrected = computeCorrected(analysisData.points, annotations);
+    climbSegments = detectClimbs(analysisData.points, corrected);
+    renderClimbSection(climbSegments);
+    renderClimbMap(climbSegments);
+  } else {
+    climbLayers.forEach(l => map.removeLayer(l));
+    climbLayers = [];
+  }
 }
 
 // ── Gradient visualization ───────────────────────────────────────
