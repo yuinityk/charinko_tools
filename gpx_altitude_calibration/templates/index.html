@@ -1,0 +1,1191 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GPX Viewer + Annotator</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: system-ui, -apple-system, sans-serif;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #f0f2f5;
+}
+
+/* ── Header ─────────────────────────────────────── */
+#header {
+  background: #1a237e;
+  color: #fff;
+  padding: 0 14px;
+  height: 50px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+  z-index: 1000;
+}
+#header h1 { font-size: 14px; font-weight: 700; white-space: nowrap; }
+.ctrl { display: flex; align-items: center; gap: 5px; font-size: 12px; white-space: nowrap; }
+.ctrl label { opacity: .8; }
+/* preflight modal */
+#preflight-modal {
+  position: fixed; inset: 0;
+  background: rgba(26,35,126,.55);
+  display: none; align-items: center; justify-content: center; z-index: 9100;
+}
+#preflight-modal.active { display: flex; }
+#preflight-box {
+  background: #fff; border-radius: 12px; padding: 24px 28px;
+  box-shadow: 0 8px 32px rgba(0,0,0,.3); min-width: 300px; max-width: 400px; width: 90%;
+}
+#preflight-box h3 { color: #1a237e; font-size: 15px; margin-bottom: 14px; }
+.pf-row { display: flex; justify-content: space-between; align-items: baseline;
+  font-size: 13px; padding: 4px 0; border-bottom: 1px solid #f0f0f0; color: #555; }
+.pf-row:last-of-type { border-bottom: none; margin-bottom: 4px; }
+.pf-row strong { color: #1a237e; font-size: 14px; }
+#pf-btns { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
+.pf-btn {
+  padding: 10px 14px; border-radius: 6px; border: none; cursor: pointer;
+  font-size: 13px; font-weight: 600; text-align: left; transition: background .15s; width: 100%;
+}
+.pf-btn small { font-size: 11px; font-weight: 400; opacity: .8; display: block; margin-top: 2px; }
+.pf-btn.primary   { background: #1a237e; color: #fff; }
+.pf-btn.primary:hover { background: #283593; }
+.pf-btn.secondary { background: #e8f5e9; color: #2e7d32; border: 1.5px solid #a5d6a7; }
+.pf-btn.secondary:hover { background: #c8e6c9; }
+.pf-btn.cancel    { background: #f5f5f5; color: #666; border: 1px solid #ddd; text-align: center; }
+.pf-btn.cancel:hover { background: #eee; }
+input[type="file"] { display: none; }
+#gpx-add-btn {
+  background: rgba(255,255,255,.18); color: #fff;
+  border: 1px solid rgba(255,255,255,.35);
+  padding: 4px 9px; border-radius: 4px; cursor: pointer;
+  font-size: 12px; white-space: nowrap; flex-shrink: 0;
+}
+#gpx-add-btn:hover { background: rgba(255,255,255,.28); }
+#gpx-file-area {
+  display: flex; align-items: center; gap: 4px;
+  overflow-x: auto; max-width: 260px; flex-shrink: 1;
+}
+#gpx-file-area::-webkit-scrollbar { display: none; }
+.gpx-chip {
+  display: flex; align-items: center; gap: 2px;
+  background: rgba(255,255,255,.15); color: #fff;
+  border: 1px solid rgba(255,255,255,.3);
+  border-radius: 12px; padding: 2px 5px 2px 8px;
+  font-size: 11px; white-space: nowrap;
+}
+.gpx-chip span { max-width: 90px; overflow: hidden; text-overflow: ellipsis; }
+.gpx-chip button {
+  background: none; border: none; color: rgba(255,255,255,.65);
+  cursor: pointer; padding: 0 2px; font-size: 13px; line-height: 1;
+}
+.gpx-chip button:hover { color: #fff; }
+.hdr-btn {
+  border: none; padding: 5px 12px; border-radius: 4px;
+  cursor: pointer; font-weight: 700; font-size: 12px; white-space: nowrap;
+  transition: background .15s;
+}
+#analyze-btn  { background: #ffca28; color: #1a237e; }
+#analyze-btn:hover { background: #ffd54f; }
+#analyze-btn:disabled { opacity: .4; cursor: not-allowed; }
+#mode-btn { background: rgba(255,255,255,.15); color: #fff; border: 1.5px solid rgba(255,255,255,.4); }
+#mode-btn.active { background: #4caf50; border-color: #4caf50; }
+#save-btn  { background: rgba(255,255,255,.15); color: #fff; border: 1.5px solid rgba(255,255,255,.4); }
+#save-btn:disabled  { opacity: .35; cursor: not-allowed; }
+#load-json-btn { background: rgba(255,255,255,.15); color: #fff; border: 1.5px solid rgba(255,255,255,.4); }
+#export-btn { background: #26a69a; color: #fff; border: none; }
+#export-btn:hover { background: #2bbbad; }
+#export-btn:disabled { opacity: .35; cursor: not-allowed; }
+#ann-json-file { display: none; }
+#help-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; border-radius: 50%;
+  background: rgba(255,255,255,.18); color: #fff;
+  border: 1px solid rgba(255,255,255,.35);
+  font-size: 13px; font-weight: 700; text-decoration: none;
+  flex-shrink: 0; line-height: 1;
+}
+#help-btn:hover { background: rgba(255,255,255,.32); }
+#status {
+  font-size: 11px; opacity: .8; margin-left: auto;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 420px;
+}
+
+/* ── Map ─────────────────────────────────────────── */
+#map { flex: 1; min-height: 0; position: relative; }
+#map-tip {
+  position: absolute;
+  background: rgba(26,35,126,.88); color: #fff;
+  font-size: 11px; padding: 4px 8px; border-radius: 4px;
+  pointer-events: none; white-space: nowrap;
+  display: none; z-index: 800;
+}
+
+/* ── Resize handle ──────────────────────────────── */
+#resize-handle {
+  height: 5px; background: #c5cae9;
+  cursor: row-resize; flex-shrink: 0; position: relative;
+}
+#resize-handle::after {
+  content: ''; position: absolute; left: 50%; top: 1px;
+  transform: translateX(-50%);
+  width: 40px; height: 3px; border-radius: 2px; background: #7986cb;
+}
+#resize-handle:hover { background: #9fa8da; }
+
+/* ── Bottom panel ───────────────────────────────── */
+#bottom {
+  height: 320px; background: #fff;
+  display: flex; flex-direction: column; flex-shrink: 0;
+}
+
+/* legend bar */
+#legend-bar {
+  height: 33px; display: flex; align-items: center;
+  gap: 14px; padding: 0 12px;
+  border-bottom: 1px solid #eee; flex-shrink: 0;
+  font-size: 11.5px; color: #444; background: #fafafa;
+}
+#legend-bar strong { color: #1a237e; font-size: 12px; margin-right: 2px; }
+.li { display: flex; align-items: center; gap: 4px; }
+.sw-line { display: inline-block; width: 24px; height: 0; }
+.sw-line.terrain   { border-top: 2px dashed #9e9e9e; }
+.sw-line.corrected { border-top: 2.5px solid #1565c0; }
+.sw-band { width: 12px; height: 10px; border-radius: 2px; }
+.sw-band.manual { background: rgba(76,175,80,.3); border: 1px solid rgba(76,175,80,.8); }
+.spacer { flex: 1; }
+#elev-stats {
+  display: flex; align-items: center; gap: 10px;
+  font-size: 12px; font-weight: 600; white-space: nowrap;
+  padding: 0 6px; border-left: 1px solid #e0e0e0;
+}
+#elev-stats .gain { color: #2e7d32; }
+#elev-stats .loss { color: #c62828; }
+#elev-stats.hidden { display: none; }
+.sm-btn {
+  font-size: 11px; padding: 3px 9px; border-radius: 4px;
+  cursor: pointer; border: 1px solid #ccc; background: #f5f5f5; color: #333;
+  white-space: nowrap;
+}
+.sm-btn:hover { background: #e0e0e0; }
+#ann-hint { font-size: 11px; color: #4caf50; font-weight: 600; display: none; white-space: nowrap; }
+
+/* chart */
+#chart-wrap {
+  flex: 1; min-height: 0; position: relative; padding: 5px 14px 6px;
+}
+#elevation-chart { width: 100% !important; height: 100% !important; }
+
+/* drag overlay */
+#chart-overlay {
+  position: absolute;
+  top: 5px; left: 14px; right: 14px; bottom: 6px;
+  display: none; cursor: crosshair; z-index: 10; user-select: none;
+}
+#chart-overlay.active { display: block; }
+
+/* chart ↔ annotation resize handle */
+#chart-ann-handle {
+  height: 4px; background: #e8eaf6;
+  cursor: row-resize; flex-shrink: 0; position: relative;
+}
+#chart-ann-handle::after {
+  content: ''; position: absolute; left: 50%; top: 1px;
+  transform: translateX(-50%);
+  width: 30px; height: 2px; border-radius: 1px; background: #9fa8da;
+}
+#chart-ann-handle:hover { background: #c5cae9; }
+
+/* annotation list */
+#ann-section {
+  border-top: none; flex-shrink: 0;
+  height: 90px; overflow-y: auto; background: #fafafa;
+}
+#ann-section table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+#ann-section th, #ann-section td { padding: 3px 10px; text-align: left; border-bottom: 1px solid #eee; }
+#ann-section th { background: #f0f2f5; font-weight: 600; color: #555; position: sticky; top: 0; }
+.del-btn { background: none; border: none; cursor: pointer; color: #e53935; font-size: 14px; padding: 0 4px; }
+.del-btn:hover { color: #b71c1c; }
+#ann-empty { font-size: 12px; color: #aaa; text-align: center; padding: 8px; }
+
+/* loading */
+#loading {
+  position: fixed; inset: 0;
+  background: rgba(26,35,126,.55);
+  display: none; align-items: center; justify-content: center; z-index: 9000;
+}
+#loading.active { display: flex; }
+#loading-box { background: #fff; border-radius: 12px; padding: 28px 36px; text-align: center; box-shadow: 0 8px 32px rgba(0,0,0,.3); }
+#loading-box p  { margin-top: 10px; color: #333; font-size: 14px; }
+#loading-box small { color: #888; font-size: 11px; }
+.spinner { width: 36px; height: 36px; margin: 0 auto; border: 4px solid #e0e0e0; border-top-color: #1a237e; border-radius: 50%; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<div id="header">
+  <h1>GPX Viewer</h1>
+  <a href="/help" target="_blank" id="help-btn" title="使い方">?</a>
+  <button id="gpx-add-btn" onclick="document.getElementById('gpx-file-input').click()">+ GPX追加</button>
+  <input type="file" id="gpx-file-input" accept=".gpx" onchange="onGpxFileAdded(this)">
+  <div id="gpx-file-area"></div>
+  <button class="hdr-btn" id="analyze-btn" onclick="doAnalyze()">解析</button>
+  <button class="hdr-btn" id="mode-btn" onclick="toggleAnnotationMode()" title="グラフ上をドラッグして区間指定 / 端をドラッグして調整">✏ アノテーション</button>
+  <button class="hdr-btn" id="save-btn" onclick="saveAnnotations()" disabled>💾 保存</button>
+  <button class="hdr-btn" id="load-json-btn" onclick="document.getElementById('ann-json-file').click()" title="保存済みアノテーションJSONを読み込む">📂 JSON読み込み</button>
+  <input type="file" id="ann-json-file" accept=".json" onchange="loadAnnotationFile(this)">
+  <button class="hdr-btn" id="export-btn" onclick="exportGPX()" disabled>⬇ GPX出力</button>
+  <span id="status">GPXファイルを選択してください</span>
+</div>
+
+<div id="map">
+  <div id="map-tip"></div>
+</div>
+
+<div id="resize-handle"></div>
+
+<div id="bottom">
+  <div id="legend-bar">
+    <strong>標高プロファイル</strong>
+    <div class="li"><span class="sw-line terrain"></span>GSI地形標高</div>
+    <div class="li"><span class="sw-line corrected"></span>アノテーション補正後</div>
+    <div class="li"><span class="sw-band manual"></span>手動アノテーション</div>
+    <span id="ann-hint">← グラフをドラッグ / 端をドラッグして調整</span>
+    <div class="spacer"></div>
+    <div id="elev-stats" class="hidden">
+      <span class="gain">↑ <span id="stat-gain">—</span> m</span>
+      <span class="loss">↓ <span id="stat-loss">—</span> m</span>
+    </div>
+    <button class="sm-btn" onclick="resetZoom()" title="ダブルクリックでもリセット">🔍 ズームリセット</button>
+    <button class="sm-btn" onclick="clearAnnotations()">🗑 全削除</button>
+  </div>
+
+  <div id="chart-wrap">
+    <canvas id="elevation-chart"></canvas>
+    <div id="chart-overlay"></div>
+  </div>
+
+  <div id="chart-ann-handle"></div>
+
+  <div id="ann-section">
+    <table>
+      <thead>
+        <tr><th>#</th><th>開始 (km)</th><th>終了 (km)</th><th>長さ (m)</th><th>メモ</th><th></th></tr>
+      </thead>
+      <tbody id="ann-rows"></tbody>
+    </table>
+    <div id="ann-empty">アノテーションなし — アノテーションモードでグラフをドラッグして追加</div>
+  </div>
+</div>
+
+<div id="preflight-modal">
+  <div id="preflight-box">
+    <h3>解析の確認</h3>
+    <div class="pf-row"><span>トラック点数</span><strong id="pf-n-total">—</strong></div>
+    <div class="pf-row"><span>通信速度（実測）</span><strong id="pf-rate">—</strong></div>
+    <div id="pf-btns">
+      <button class="pf-btn primary" id="pf-btn-all">
+        全点で処理
+        <small id="pf-time-all"></small>
+      </button>
+      <button class="pf-btn secondary" id="pf-btn-sample">
+        <span id="pf-sample-label"></span>
+        <small id="pf-time-sample"></small>
+      </button>
+      <button class="pf-btn cancel" id="pf-btn-cancel">キャンセル</button>
+    </div>
+  </div>
+</div>
+
+<div id="loading">
+  <div id="loading-box">
+    <div class="spinner"></div>
+    <p id="loading-msg">地理院地図から標高を取得中...</p>
+    <small>点数によっては数分かかります</small>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+'use strict';
+
+// ── Constants ──────────────────────────────────────────────────
+const EDGE_PX   = 9;
+const ZOOM_STEP = 1.3;
+
+// ── State ──────────────────────────────────────────────────────
+let analysisData   = null;
+let annotations    = [];
+let annotationMode = false;
+let gpxKey         = null;
+let fileSegments   = [];   // [{name, start_km, end_km}]
+let gpxFiles       = [];   // 選択済みファイルを順序付きで保持
+let dragState      = null;   // {mode:'new'|'edge', x0?,x1?,annIdx?,edge?}
+let panState       = null;   // {startClientX, startZoomMin, startZoomMax, dataRange, pxRange, dataMin, dataMax}
+let mapHoverDist   = null;
+let xZoomMin       = null;
+let xZoomMax       = null;
+
+let map, chart;
+let routeLayer    = null;
+let hitLayer      = null;
+let annotLayers   = [];
+let cursorMarker  = null;
+let endpointMarkers = [];
+
+// ── Leaflet ─────────────────────────────────────────────────────
+map = L.map('map').setView([35.68, 139.69], 10);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+  maxZoom: 19,
+}).addTo(map);
+
+// ── Annotation-based elevation correction (frontend) ────────────
+//
+// For each annotated tunnel segment [ann.start, ann.end] (km):
+//   - Find the last point index whose distance <= ann.start  → entry portal
+//   - Find the first point index whose distance >= ann.end   → exit portal
+//   - Linearly interpolate terrain elevation between portals
+//   - Points outside annotations keep terrain elevation unchanged
+//
+function computeCorrected(points, anns) {
+  const elev = points.map(p => p.ele_terrain);
+
+  anns.forEach(ann => {
+    // Entry portal: last index with distance <= ann.start
+    let entryIdx = 0;
+    for (let i = 0; i < points.length; i++) {
+      if (points[i].distance <= ann.start) entryIdx = i;
+      else break;
+    }
+    // Exit portal: first index with distance >= ann.end
+    let exitIdx = points.length - 1;
+    for (let i = entryIdx; i < points.length; i++) {
+      if (points[i].distance >= ann.end) { exitIdx = i; break; }
+    }
+    if (exitIdx <= entryIdx + 1) return;  // nothing to interpolate
+
+    const eS   = elev[entryIdx];
+    const eE   = elev[exitIdx];
+    const span = exitIdx - entryIdx;
+    for (let i = entryIdx + 1; i < exitIdx; i++) {
+      const t  = (i - entryIdx) / span;
+      elev[i]  = Math.round((eS + t * (eE - eS)) * 10) / 10;
+    }
+  });
+
+  return elev;
+}
+
+// ── Chart.js plugin ──────────────────────────────────────────────
+const gpxPlugin = {
+  id: 'gpxPlugin',
+
+  beforeDatasetsDraw(ch) {
+    const { ctx, chartArea: ca, scales } = ch;
+    if (!ca) return;
+
+    // Manual annotation bands (green)
+    annotations.forEach(ann =>
+      drawBand(ctx, ca, scales, ann.start, ann.end,
+        'rgba(76,175,80,.2)', 'rgba(76,175,80,.85)')
+    );
+
+    // New-annotation rubber-band while dragging
+    if (dragState?.mode === 'new') {
+      const x1 = Math.min(dragState.x0, dragState.x1);
+      const x2 = Math.max(dragState.x0, dragState.x1);
+      ctx.save();
+      ctx.fillStyle = 'rgba(76,175,80,.12)';
+      ctx.fillRect(x1, ca.top, x2 - x1, ca.height);
+      ctx.strokeStyle = '#4caf50';
+      ctx.lineWidth = 2; ctx.setLineDash([5, 4]);
+      ctx.strokeRect(x1, ca.top, x2 - x1, ca.height);
+      ctx.setLineDash([]);
+      ctx.restore();
+    }
+  },
+
+  afterDatasetsDraw(ch) {
+    const { ctx, chartArea: ca, scales } = ch;
+    if (!ca) return;
+
+    // Edge handles (annotation mode only)
+    if (annotationMode) {
+      annotations.forEach(ann => {
+        [ann.start, ann.end].forEach(d => {
+          const px = scales.x.getPixelForValue(d);
+          if (px >= ca.left && px <= ca.right) drawEdgeHandle(ctx, px, ca.top, ca.bottom);
+        });
+      });
+    }
+
+    // Map-hover crosshair
+    if (mapHoverDist !== null) {
+      const x = scales.x.getPixelForValue(mapHoverDist);
+      if (x >= ca.left && x <= ca.right) {
+        ctx.save();
+        ctx.strokeStyle = '#1a237e'; ctx.lineWidth = 1.5; ctx.setLineDash([4, 3]);
+        ctx.beginPath(); ctx.moveTo(x, ca.top); ctx.lineTo(x, ca.bottom); ctx.stroke();
+        ctx.setLineDash([]);
+        ch.data.datasets.forEach((ds, di) => {
+          const py = interpY(ch, di, mapHoverDist);
+          if (py === null) return;
+          ctx.fillStyle = ds.borderColor;
+          ctx.beginPath(); ctx.arc(x, py, 4.5, 0, Math.PI * 2); ctx.fill();
+          ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
+        });
+        ctx.restore();
+      }
+    }
+  },
+};
+
+function drawBand(ctx, ca, scales, d1, d2, fill, stroke) {
+  const px1 = scales.x.getPixelForValue(d1);
+  const px2 = scales.x.getPixelForValue(d2);
+  ctx.save();
+  ctx.fillStyle = fill;
+  ctx.fillRect(Math.min(px1,px2), ca.top, Math.abs(px2-px1), ca.height);
+  ctx.strokeStyle = stroke; ctx.lineWidth = 1.5; ctx.setLineDash([4, 3]);
+  [px1, px2].forEach(x => {
+    ctx.beginPath(); ctx.moveTo(x, ca.top); ctx.lineTo(x, ca.bottom); ctx.stroke();
+  });
+  ctx.setLineDash([]);
+  ctx.restore();
+}
+
+function drawEdgeHandle(ctx, x, top, bottom) {
+  ctx.save();
+  ctx.fillStyle = '#4caf50'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1;
+  [[top+1, top+9, 1], [bottom-1, bottom-9, -1]].forEach(([base, tip]) => {
+    ctx.beginPath();
+    ctx.moveTo(x-5, base); ctx.lineTo(x+5, base); ctx.lineTo(x, tip);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+  });
+  ctx.restore();
+}
+
+function interpY(ch, di, dist) {
+  const data = ch.data.datasets[di].data;
+  if (!data?.length) return null;
+  let lo = 0, hi = data.length - 1;
+  if (dist <= data[0].x)  return ch.scales.y.getPixelForValue(data[0].y);
+  if (dist >= data[hi].x) return ch.scales.y.getPixelForValue(data[hi].y);
+  while (lo < hi - 1) {
+    const mid = (lo + hi) >> 1;
+    data[mid].x <= dist ? (lo = mid) : (hi = mid);
+  }
+  const t = (dist - data[lo].x) / (data[hi].x - data[lo].x);
+  return ch.scales.y.getPixelForValue(data[lo].y + t * (data[hi].y - data[lo].y));
+}
+
+Chart.register(gpxPlugin);
+
+// ── Chart build / update ─────────────────────────────────────────
+function buildChart(points) {
+  if (chart) { chart.destroy(); chart = null; }
+  xZoomMin = null; xZoomMax = null;
+
+  const terrainData   = points.map(p => ({ x: p.distance, y: p.ele_terrain }));
+  const corrected     = computeCorrected(points, annotations);
+  const correctedData = corrected.map((y, i) => ({ x: points[i].distance, y }));
+  updateElevStats(corrected);
+
+  chart = new Chart(document.getElementById('elevation-chart'), {
+    type: 'line',
+    data: {
+      datasets: [
+        {
+          label: 'GSI地形標高',
+          data: terrainData,
+          borderColor: '#9e9e9e', borderWidth: 1.5, borderDash: [5, 4],
+          pointRadius: 0, fill: false, tension: 0.15,
+        },
+        {
+          label: 'アノテーション補正後',
+          data: correctedData,
+          borderColor: '#1565c0', borderWidth: 2,
+          pointRadius: 0, fill: false, tension: 0.15,
+        },
+      ],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          mode: 'index', intersect: false,
+          callbacks: {
+            title: items => `距離: ${Number(items[0].parsed.x).toFixed(3)} km`,
+            label:  item => `${item.dataset.label}: ${item.parsed.y.toFixed(1)} m`,
+          },
+        },
+      },
+      scales: {
+        x: {
+          type: 'linear',
+          title: { display: true, text: '距離 (km)', font: { size: 11 } },
+          ticks: { maxTicksLimit: 12, callback: v => Number(v).toFixed(1), font: { size: 10 } },
+        },
+        y: {
+          title: { display: true, text: '標高 (m)', font: { size: 11 } },
+          ticks: { font: { size: 10 } },
+        },
+      },
+    },
+  });
+}
+
+// アノテーション変更時に補正標高ラインを再計算してチャートを更新
+function updateCorrectedLine() {
+  if (!chart || !analysisData) return;
+  const corrected = computeCorrected(analysisData.points, annotations);
+  chart.data.datasets[1].data = analysisData.points.map((p, i) => ({
+    x: p.distance, y: corrected[i],
+  }));
+  chart.update('none');
+  updateElevStats(corrected);
+}
+
+function smoothElevs(arr, half) {
+  return arr.map((_, i) => {
+    const lo = Math.max(0, i - half), hi = Math.min(arr.length - 1, i + half);
+    let s = 0;
+    for (let j = lo; j <= hi; j++) s += arr[j];
+    return s / (hi - lo + 1);
+  });
+}
+
+function updateElevStats(correctedElevs) {
+  // 移動平均(前後10点=±10点)でDEM格子ノイズを除去してから集計
+  const sm = smoothElevs(correctedElevs, 10);
+  let gain = 0, loss = 0;
+  for (let i = 1; i < sm.length; i++) {
+    const diff = sm[i] - sm[i - 1];
+    if (diff > 0) gain += diff;
+    else          loss -= diff;
+  }
+  document.getElementById('stat-gain').textContent = Math.round(gain);
+  document.getElementById('stat-loss').textContent = Math.round(loss);
+  document.getElementById('elev-stats').classList.remove('hidden');
+}
+
+function moveCursorToIndex(idx) {
+  if (!analysisData) return;
+  const p = analysisData.points[idx];
+  if (!p) return;
+  if (!cursorMarker) {
+    cursorMarker = L.circleMarker([p.lat, p.lon], {
+      radius: 10, color: '#fff', fillColor: '#ff5722',
+      fillOpacity: 1, weight: 3, zIndexOffset: 2000,
+    }).addTo(map);
+  } else {
+    cursorMarker.setLatLng([p.lat, p.lon]);
+  }
+}
+
+// ── Zoom ─────────────────────────────────────────────────────────
+function setZoom(min, max) {
+  xZoomMin = min; xZoomMax = max;
+  if (!chart) return;
+  chart.options.scales.x.min = min ?? undefined;
+  chart.options.scales.x.max = max ?? undefined;
+  chart.update('none');
+}
+function resetZoom() { setZoom(null, null); }
+
+function handleWheelZoom(e) {
+  if (!chart || !analysisData) return;
+  e.preventDefault();
+  const pts     = analysisData.points;
+  const dataMin = pts[0].distance;
+  const dataMax = pts.at(-1).distance;
+  const curMin  = xZoomMin ?? dataMin;
+  const curMax  = xZoomMax ?? dataMax;
+  const range   = curMax - curMin;
+
+  const rect     = document.getElementById('elevation-chart').getBoundingClientRect();
+  const mouseVal = chart.scales.x.getValueForPixel(e.clientX - rect.left);
+  const factor   = e.deltaY > 0 ? ZOOM_STEP : 1 / ZOOM_STEP;
+  const newRange = Math.max(0.05, Math.min(dataMax - dataMin, range * factor));
+  const ratio    = (mouseVal - curMin) / range;
+
+  let newMin = mouseVal - ratio * newRange;
+  let newMax = mouseVal + (1 - ratio) * newRange;
+  if (newMin < dataMin) { newMax = Math.min(dataMax, newMax + dataMin - newMin); newMin = dataMin; }
+  if (newMax > dataMax) { newMin = Math.max(dataMin, newMin - (newMax - dataMax)); newMax = dataMax; }
+  setZoom(newMin, newMax);
+}
+
+document.getElementById('chart-wrap').addEventListener('wheel',  handleWheelZoom, { passive: false });
+document.getElementById('chart-wrap').addEventListener('dblclick', resetZoom);
+
+// ── Annotation mode ──────────────────────────────────────────────
+function toggleAnnotationMode() {
+  annotationMode = !annotationMode;
+  const btn = document.getElementById('mode-btn');
+  const ov  = document.getElementById('chart-overlay');
+  const hint = document.getElementById('ann-hint');
+  if (annotationMode) {
+    btn.textContent = '✏ ON'; btn.classList.add('active');
+    ov.classList.add('active'); hint.style.display = 'block';
+    if (chart) { chart.options.plugins.tooltip.enabled = false; chart.update('none'); }
+  } else {
+    btn.textContent = '✏ アノテーション'; btn.classList.remove('active');
+    ov.classList.remove('active'); hint.style.display = 'none';
+    dragState = null;
+    if (chart) { chart.options.plugins.tooltip.enabled = true; chart.update('none'); }
+  }
+  updateChartCursor();
+}
+
+function updateChartCursor() {
+  const c = document.getElementById('elevation-chart');
+  c.style.cursor = (!annotationMode && analysisData) ? (panState ? 'grabbing' : 'grab') : '';
+}
+
+// ── Edge detection ───────────────────────────────────────────────
+function findNearEdge(overlayX) {
+  if (!chart || !annotations.length) return null;
+  const scales = chart.scales.x;
+  let best = null, bestDist = EDGE_PX;
+  annotations.forEach((ann, i) => {
+    ['start', 'end'].forEach(edge => {
+      const d = Math.abs(overlayX - scales.getPixelForValue(ann[edge]));
+      if (d < bestDist) { bestDist = d; best = { annIdx: i, edge }; }
+    });
+  });
+  return best;
+}
+
+// ── Chart pan (annotation mode OFF) ──────────────────────────────
+document.getElementById('elevation-chart').addEventListener('mousedown', e => {
+  if (annotationMode || !chart || !analysisData || e.button !== 0) return;
+  const ca = chart.chartArea;
+  const rect = e.currentTarget.getBoundingClientRect();
+  const localX = e.clientX - rect.left;
+  if (localX < ca.left || localX > ca.right) return;
+  const pts     = analysisData.points;
+  const dataMin = pts[0].distance;
+  const dataMax = pts.at(-1).distance;
+  const curMin  = xZoomMin ?? dataMin;
+  const curMax  = xZoomMax ?? dataMax;
+  panState = {
+    startClientX: e.clientX,
+    startZoomMin: curMin, startZoomMax: curMax,
+    dataRange: curMax - curMin,
+    pxRange: ca.right - ca.left,
+    dataMin, dataMax,
+  };
+  e.preventDefault();
+  updateChartCursor();
+});
+
+// ── Drag handlers ────────────────────────────────────────────────
+const overlay = document.getElementById('chart-overlay');
+
+overlay.addEventListener('mousedown', e => {
+  if (!chart) return;
+  e.preventDefault();
+  const ca   = chart.chartArea;
+  const x    = clamp(e.offsetX, ca.left, ca.right);
+  const near = findNearEdge(e.offsetX);
+  dragState  = near
+    ? { mode: 'edge', annIdx: near.annIdx, edge: near.edge }
+    : { mode: 'new',  x0: x, x1: x };
+});
+
+overlay.addEventListener('mousemove', e => {
+  if (dragState) return;
+  overlay.style.cursor = findNearEdge(e.offsetX) ? 'ew-resize' : 'crosshair';
+});
+
+document.addEventListener('mousemove', e => {
+  if (panState) {
+    const dx     = e.clientX - panState.startClientX;
+    const dataDx = (dx / panState.pxRange) * panState.dataRange;
+    let newMin   = panState.startZoomMin - dataDx;
+    let newMax   = panState.startZoomMax - dataDx;
+    if (newMin < panState.dataMin) { newMin = panState.dataMin; newMax = newMin + panState.dataRange; }
+    if (newMax > panState.dataMax) { newMax = panState.dataMax; newMin = newMax - panState.dataRange; }
+    setZoom(newMin, newMax);
+    return;
+  }
+  if (!dragState || !chart) return;
+  const rect = overlay.getBoundingClientRect();
+  const x    = clamp(e.clientX - rect.left, chart.chartArea.left, chart.chartArea.right);
+
+  if (dragState.mode === 'new') {
+    dragState.x1 = x;
+    chart.update('none');
+  } else if (dragState.mode === 'edge') {
+    const d   = chart.scales.x.getValueForPixel(x);
+    const ann = annotations[dragState.annIdx];
+    if (dragState.edge === 'start') ann.start = round3(Math.min(d, ann.end   - 0.001));
+    else                            ann.end   = round3(Math.max(d, ann.start + 0.001));
+    updateCorrectedLine();          // 補正ラインをリアルタイム更新
+    updateAnnotationMapLayers();
+  }
+});
+
+document.addEventListener('mouseup', e => {
+  if (panState) { panState = null; updateChartCursor(); return; }
+  if (!dragState || !chart) return;
+  if (dragState.mode === 'new') {
+    const rect = overlay.getBoundingClientRect();
+    const x    = clamp(e.clientX - rect.left, chart.chartArea.left, chart.chartArea.right);
+    const d0   = chart.scales.x.getValueForPixel(Math.min(dragState.x0, x));
+    const d1   = chart.scales.x.getValueForPixel(Math.max(dragState.x0, x));
+    dragState = null;
+    if (d1 - d0 > 0.005) addAnnotation(round3(d0), round3(d1));
+    else chart.update('none');
+  } else if (dragState.mode === 'edge') {
+    dragState = null;
+    annotations.sort((a, b) => a.start - b.start);
+    renderAnnotationList();
+    updateAnnotationMapLayers();
+    updateCorrectedLine();
+  }
+});
+
+// ── Annotation CRUD ──────────────────────────────────────────────
+function addAnnotation(start, end, note = '') {
+  annotations.push({ start, end, note });
+  annotations.sort((a, b) => a.start - b.start);
+  onAnnotationsChanged();
+}
+
+function removeAnnotation(idx) {
+  annotations.splice(idx, 1);
+  onAnnotationsChanged();
+}
+
+function clearAnnotations() {
+  if (!annotations.length) return;
+  if (!confirm('全アノテーションを削除しますか？')) return;
+  annotations = [];
+  onAnnotationsChanged();
+}
+
+function onAnnotationsChanged() {
+  renderAnnotationList();
+  updateAnnotationMapLayers();
+  updateCorrectedLine();
+  document.getElementById('save-btn').disabled = !gpxKey;
+}
+
+function renderAnnotationList() {
+  const tbody = document.getElementById('ann-rows');
+  const empty = document.getElementById('ann-empty');
+  tbody.innerHTML = '';
+  if (!annotations.length) { empty.style.display = 'block'; return; }
+  empty.style.display = 'none';
+  annotations.forEach((ann, i) => {
+    const len = Math.round((ann.end - ann.start) * 1000);
+    const tr  = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${i + 1}</td>
+      <td>${ann.start.toFixed(3)}</td>
+      <td>${ann.end.toFixed(3)}</td>
+      <td>${len}</td>
+      <td><input type="text" value="${esc(ann.note)}" placeholder="メモ"
+           style="border:none;background:transparent;font-size:11.5px;width:120px;outline:none;"
+           onchange="annotations[${i}].note=this.value;document.getElementById('save-btn').disabled=!gpxKey"></td>
+      <td><button class="del-btn" onclick="removeAnnotation(${i})">×</button></td>`;
+    tbody.appendChild(tr);
+  });
+}
+
+function esc(s) {
+  return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── Annotation map layers ────────────────────────────────────────
+function updateAnnotationMapLayers() {
+  annotLayers.forEach(l => map.removeLayer(l));
+  annotLayers = [];
+  if (!analysisData) return;
+  annotations.forEach((ann, i) => {
+    const pts = analysisData.points
+      .filter(p => p.distance >= ann.start - 0.001 && p.distance <= ann.end + 0.001)
+      .map(p => [p.lat, p.lon]);
+    if (pts.length < 2) return;
+    const layer = L.polyline(pts, { color: '#4caf50', weight: 7, opacity: 0.9, dashArray: '10 5' })
+      .bindPopup(
+        `<b>アノテーション #${i+1}</b>${ann.note ? ' (' + ann.note + ')' : ''}<br>` +
+        `${ann.start.toFixed(3)} 〜 ${ann.end.toFixed(3)} km<br>` +
+        `${Math.round((ann.end - ann.start) * 1000)} m`
+      ).addTo(map);
+    annotLayers.push(layer);
+  });
+}
+
+// ── Map rendering ────────────────────────────────────────────────
+function renderMap(d) {
+  if (hitLayer)     { map.removeLayer(hitLayer);   hitLayer   = null; }
+  if (routeLayer)   { map.removeLayer(routeLayer); routeLayer = null; }
+  annotLayers.forEach(l => map.removeLayer(l)); annotLayers = [];
+  endpointMarkers.forEach(m => map.removeLayer(m)); endpointMarkers = [];
+  hideCursorMarker();
+
+  const latlngs = d.points.map(p => [p.lat, p.lon]);
+
+  routeLayer = L.polyline(latlngs, { color: '#1565c0', weight: 3, opacity: .85, interactive: false }).addTo(map);
+  hitLayer   = L.polyline(latlngs, { color: '#1565c0', weight: 16, opacity: 0 }).addTo(map);
+  map.fitBounds(routeLayer.getBounds(), { padding: [24, 24] });
+
+  endpointMarkers = [
+    L.circleMarker(latlngs[0],     { radius:7, color:'#2e7d32', fillColor:'#4caf50', fillOpacity:1, weight:2 }).bindTooltip('スタート').addTo(map),
+    L.circleMarker(latlngs.at(-1), { radius:7, color:'#b71c1c', fillColor:'#f44336', fillOpacity:1, weight:2 }).bindTooltip('ゴール').addTo(map),
+  ];
+
+  addMapHoverEvents(d);
+}
+
+// ── Map hover → chart crosshair ──────────────────────────────────
+function addMapHoverEvents(d) {
+  const tip   = document.getElementById('map-tip');
+  const mapEl = document.getElementById('map');
+
+  hitLayer.on('mousemove', e => {
+    const { lat, lng } = e.latlng;
+    let best = null, bestD2 = Infinity;
+    for (const p of d.points) {
+      const d2 = (p.lat - lat) ** 2 + (p.lon - lng) ** 2;
+      if (d2 < bestD2) { bestD2 = d2; best = p; }
+    }
+    if (!best) return;
+    mapHoverDist = best.distance;
+    if (chart) chart.update('none');
+
+    const mr = mapEl.getBoundingClientRect();
+    tip.style.left    = (e.originalEvent.clientX - mr.left + 14) + 'px';
+    tip.style.top     = (e.originalEvent.clientY - mr.top  - 32) + 'px';
+    tip.style.display = 'block';
+    tip.textContent   = `${best.distance.toFixed(2)} km  /  ${best.ele_terrain.toFixed(0)} m`;
+  });
+
+  hitLayer.on('mouseout', () => {
+    mapHoverDist = null;
+    if (chart) chart.update('none');
+    tip.style.display = 'none';
+  });
+}
+
+// ── Resize handles ───────────────────────────────────────────────
+(function initChartAnnResize() {
+  const handle  = document.getElementById('chart-ann-handle');
+  const annSect = document.getElementById('ann-section');
+  let resizing = false, startY = 0, startH = 0;
+  handle.addEventListener('mousedown', e => {
+    resizing = true; startY = e.clientY; startH = annSect.offsetHeight; e.preventDefault();
+  });
+  document.addEventListener('mousemove', e => {
+    if (!resizing) return;
+    const newH = Math.max(34, Math.min(260, startH - (e.clientY - startY)));
+    annSect.style.height = newH + 'px';
+    if (chart) chart.update('none');
+  });
+  document.addEventListener('mouseup', () => { resizing = false; });
+})();
+
+(function initResize() {
+  const handle = document.getElementById('resize-handle');
+  const bottom = document.getElementById('bottom');
+  let resizing = false, startY = 0, startH = 0;
+  handle.addEventListener('mousedown', e => {
+    resizing = true; startY = e.clientY; startH = bottom.offsetHeight; e.preventDefault();
+  });
+  document.addEventListener('mousemove', e => {
+    if (!resizing) return;
+    const newH = Math.max(180, Math.min(window.innerHeight - 120, startH + startY - e.clientY));
+    bottom.style.height = newH + 'px';
+    if (chart) chart.update('none');
+  });
+  document.addEventListener('mouseup', () => { resizing = false; });
+})();
+
+// ── Save / Load ──────────────────────────────────────────────────
+async function saveAnnotations() {
+  if (!gpxKey) return;
+  const res = await fetch(`/annotations/${encodeURIComponent(gpxKey)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ gpx_file: gpxKey, tunnels: annotations }),
+  });
+  if ((await res.json()).ok) setStatus(`アノテーション保存完了 (${annotations.length} 件)`);
+}
+
+async function loadAnnotations() {
+  if (!gpxKey) return;
+  try {
+    const res = await fetch(`/annotations/${encodeURIComponent(gpxKey)}`);
+    const d   = await res.json();
+    if (d.exists && d.tunnels?.length) {
+      annotations = d.tunnels;
+      onAnnotationsChanged();
+      setStatus(`既存アノテーション ${annotations.length} 件を読み込みました`);
+    }
+  } catch (_) {}
+}
+
+// ── Preflight helpers ─────────────────────────────────────────────
+function fmtSecs(s) {
+  if (s < 60) return `約 ${Math.round(s)} 秒`;
+  const m = Math.floor(s / 60), r = Math.round(s % 60);
+  return r ? `約 ${m} 分 ${r} 秒` : `約 ${m} 分`;
+}
+
+function showPreflightDialog(data) {
+  return new Promise(resolve => {
+    const { total_points, rate_pts_per_sec, est_secs_total } = data;
+
+    document.getElementById('pf-n-total').textContent =
+      `${total_points.toLocaleString()} 点`;
+    document.getElementById('pf-rate').textContent =
+      `${Math.round(rate_pts_per_sec)} 点/秒`;
+    document.getElementById('pf-time-all').textContent =
+      `推定時間: ${fmtSecs(est_secs_total)}`;
+
+    const sampleBtn = document.getElementById('pf-btn-sample');
+    // 1000点サンプルの選択肢（総点数が1000超の場合のみ表示）
+    const sampleN = 1000;
+    if (total_points > sampleN) {
+      document.getElementById('pf-sample-label').textContent =
+        `${sampleN.toLocaleString()} 点にサンプリングして処理`;
+      document.getElementById('pf-time-sample').textContent =
+        `推定時間: ${fmtSecs(sampleN / rate_pts_per_sec)}`;
+      sampleBtn.style.display = '';
+    } else {
+      sampleBtn.style.display = 'none';
+    }
+
+    document.getElementById('preflight-modal').classList.add('active');
+
+    function done(result) {
+      document.getElementById('preflight-modal').classList.remove('active');
+      document.getElementById('pf-btn-all').onclick    = null;
+      document.getElementById('pf-btn-sample').onclick = null;
+      document.getElementById('pf-btn-cancel').onclick = null;
+      resolve(result);
+    }
+
+    document.getElementById('pf-btn-all').onclick    = () => done(null);   // null = 全点
+    document.getElementById('pf-btn-sample').onclick = () => done(sampleN);
+    document.getElementById('pf-btn-cancel').onclick = () => done(-1);     // -1 = キャンセル
+  });
+}
+
+// ── Main analyze ─────────────────────────────────────────────────
+async function doAnalyze() {
+  const files = gpxFiles;
+  if (!files.length) { alert('GPXファイルを選択してください'); return; }
+
+  const btn = document.getElementById('analyze-btn');
+  btn.disabled = true;
+
+  // ── Step 1: プリフライト（通信速度計測）────────────────────────
+  setLoadingMsg('通信速度を計測中...');
+  document.getElementById('loading').classList.add('active');
+  let pfData;
+  try {
+    const fd = new FormData();
+    files.forEach(f => fd.append('gpx', f));
+    const res = await fetch('/preflight', { method: 'POST', body: fd });
+    pfData = await res.json();
+    if (pfData.error) { setStatus('エラー: ' + pfData.error); btn.disabled = false; return; }
+  } catch (e) {
+    setStatus('エラー: ' + e.message); btn.disabled = false; return;
+  } finally {
+    document.getElementById('loading').classList.remove('active');
+  }
+
+  // ── Step 2: 確認ダイアログ ─────────────────────────────────────
+  const choice = await showPreflightDialog(pfData); // null=全点, N=サンプル数, -1=キャンセル
+  if (choice === -1) { btn.disabled = false; return; }
+
+  // ── Step 3: 解析 ───────────────────────────────────────────────
+  setLoadingMsg('地理院地図から標高を取得中...');
+  document.getElementById('loading').classList.add('active');
+  setStatus('解析中...');
+
+  const fd = new FormData();
+  files.forEach(f => fd.append('gpx', f));
+  if (choice !== null) fd.append('max_points', choice);
+
+  try {
+    const res  = await fetch('/analyze', { method: 'POST', body: fd });
+    const json = await res.json();
+    if (json.error) { setStatus('エラー: ' + json.error); return; }
+
+    analysisData = json;
+    fileSegments = json.file_segments || [];
+    gpxKey = files.map(f => f.name.replace(/\.gpx$/i, '')).join('+');
+
+    annotations = [];
+    renderMap(json);
+    buildChart(json.points);
+    await loadAnnotations();
+
+    document.getElementById('save-btn').disabled   = false;
+    document.getElementById('export-btn').disabled = false;
+    updateChartCursor();
+
+    const last   = json.points.at(-1)?.distance ?? 0;
+    const sample = json.sampled_count < json.original_count
+      ? ` [${json.original_count}→${json.sampled_count}点]` : '';
+    setStatus(`${json.points.length}点 / ${last.toFixed(1)}km${sample}`);
+
+  } catch (e) {
+    setStatus('エラー: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    document.getElementById('loading').classList.remove('active');
+  }
+}
+
+function setLoadingMsg(msg) {
+  document.getElementById('loading-msg').textContent = msg;
+}
+
+// ── Load annotation JSON from local file ─────────────────────────
+function annotationOffset(jsonGpxFile) {
+  // jsonGpxFile: e.g. "route2" or "route2+route3"
+  // 現在セッションのどのファイルから始まるかを調べてオフセット(km)を返す
+  if (!fileSegments.length || !jsonGpxFile) return 0;
+  const firstName = jsonGpxFile.split('+')[0];
+  const seg = fileSegments.find(s => s.name === firstName);
+  return seg ? seg.start_km : 0;
+}
+
+function loadAnnotationFile(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      const data    = JSON.parse(e.target.result);
+      const tunnels = data.tunnels || data.annotations || [];
+      if (!Array.isArray(tunnels)) throw new Error('tunnels フィールドが見つかりません');
+      if (!tunnels.every(t => typeof t.start === 'number' && typeof t.end === 'number')) {
+        throw new Error('start/end が数値でないエントリがあります');
+      }
+      const offset = annotationOffset(data.gpx_file);
+      const adjusted = offset === 0 ? tunnels : tunnels.map(t => ({
+        ...t,
+        start: round3(t.start + offset),
+        end:   round3(t.end   + offset),
+      }));
+      annotations = [...annotations, ...adjusted].sort((a, b) => a.start - b.start);
+      onAnnotationsChanged();
+      const msg = offset > 0
+        ? `+${adjusted.length} 件を追加 (+${offset.toFixed(3)} km オフセット適用、計 ${annotations.length} 件)`
+        : `+${adjusted.length} 件を追加 (計 ${annotations.length} 件)`;
+      setStatus(msg);
+    } catch (err) {
+      alert('JSON読み込みエラー: ' + err.message);
+    }
+    input.value = '';
+  };
+  reader.readAsText(file);
+}
+
+// ── Export calibrated GPX ─────────────────────────────────────────
+async function exportGPX() {
+  if (!analysisData) { alert('まずGPXファイルを解析してください'); return; }
+  const corrected = computeCorrected(analysisData.points, annotations);
+  const points    = analysisData.points.map((p, i) => ({
+    lat: p.lat, lon: p.lon, ele: corrected[i],
+  }));
+  try {
+    const res = await fetch('/export', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ gpx_name: gpxKey || 'calibrated', points }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      alert('エクスポートエラー: ' + (err.error || res.statusText));
+      return;
+    }
+    const blob = await res.blob();
+    const url  = URL.createObjectURL(blob);
+    const a    = Object.assign(document.createElement('a'), {
+      href: url, download: (gpxKey || 'calibrated') + '_calibrated.gpx',
+    });
+    a.click();
+    URL.revokeObjectURL(url);
+    setStatus('GPXエクスポート完了');
+  } catch (err) {
+    alert('エクスポートエラー: ' + err.message);
+  }
+}
+
+// ── Chart → map cursor ───────────────────────────────────────────
+(function initChartMapCursor() {
+  const wrap = document.getElementById('chart-wrap');
+
+  wrap.addEventListener('mousemove', e => {
+    if (!chart || !analysisData) return;
+    const ca   = chart.chartArea;
+    const rect = document.getElementById('elevation-chart').getBoundingClientRect();
+    const x    = e.clientX - rect.left;
+    if (x < ca.left || x > ca.right) { hideCursorMarker(); return; }
+
+    const dist = chart.scales.x.getValueForPixel(x);
+    const pts  = analysisData.points;
+    let lo = 0, hi = pts.length - 1;
+    while (lo < hi - 1) {
+      const mid = (lo + hi) >> 1;
+      pts[mid].distance <= dist ? (lo = mid) : (hi = mid);
+    }
+    const idx = Math.abs(pts[lo].distance - dist) <= Math.abs(pts[hi].distance - dist) ? lo : hi;
+    moveCursorToIndex(idx);
+  });
+
+  wrap.addEventListener('mouseleave', hideCursorMarker);
+})();
+
+function hideCursorMarker() {
+  if (cursorMarker) { map.removeLayer(cursorMarker); cursorMarker = null; }
+}
+
+// ── GPX file chip management ──────────────────────────────────────
+function onGpxFileAdded(input) {
+  if (input.files[0]) { gpxFiles.push(input.files[0]); renderGpxChips(); }
+  input.value = '';
+}
+
+function removeGpxFile(idx) {
+  gpxFiles.splice(idx, 1);
+  renderGpxChips();
+}
+
+function renderGpxChips() {
+  const area = document.getElementById('gpx-file-area');
+  area.innerHTML = '';
+  gpxFiles.forEach((f, i) => {
+    const chip = document.createElement('div');
+    chip.className = 'gpx-chip';
+    chip.title = f.name;
+    chip.innerHTML = `<span>${i + 1}. ${f.name.replace(/\.gpx$/i, '')}</span>`
+      + `<button onclick="removeGpxFile(${i})">×</button>`;
+    area.appendChild(chip);
+  });
+}
+
+function setStatus(msg) { document.getElementById('status').textContent = msg; }
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+function round3(v) { return Math.round(v * 1000) / 1000; }
+</script>
+</body>
+</html>
