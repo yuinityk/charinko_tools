@@ -5,6 +5,8 @@ import io
 import json
 import math
 import time
+import urllib.request
+import zipfile
 from datetime import datetime
 from pathlib import Path
 from xml.etree import ElementTree as ET
@@ -308,6 +310,166 @@ def export_gpx():
         as_attachment=True,
         download_name=f"{safe}_calibrated.gpx",
     )
+
+
+# ---------------------------------------------------------------------------
+# Routes — POI
+# ---------------------------------------------------------------------------
+
+OVERPASS_ENDPOINTS = [
+    "https://lz4.overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass-api.de/api/interpreter",
+]
+
+TILE_SIZE = 0.4  # 約44km角に分割してクエリ
+
+MICHINOEKI_URL = (
+    "https://nlftp.mlit.go.jp/ksj/gml/data/P35/P35-18/P35-18_GML.zip"
+)
+_michinoeki_cache: list[dict] | None = None
+
+
+def _load_michinoeki() -> list[dict]:
+    global _michinoeki_cache
+    if _michinoeki_cache is not None:
+        return _michinoeki_cache
+    try:
+        req = urllib.request.Request(MICHINOEKI_URL, headers={"User-Agent": "charinko_tools/1.0"})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            zdata = resp.read()
+        with zipfile.ZipFile(io.BytesIO(zdata)) as z:
+            geojson = json.loads(z.read("P35-18_GML/P35-18_Roadside_Station.geojson"))
+        stations = []
+        for f in geojson.get("features", []):
+            props = f.get("properties", {})
+            coords = f.get("geometry", {}).get("coordinates", [])
+            if len(coords) < 2:
+                continue
+            stations.append({
+                "lat":  coords[1],
+                "lon":  coords[0],
+                "name": props.get("P35_006") or "",
+                "type": "rest_area",
+            })
+        _michinoeki_cache = stations
+    except Exception:
+        _michinoeki_cache = []
+    return _michinoeki_cache
+
+def _poi_query(bbox: str) -> str:
+    return (
+        f"[out:json][timeout:20];"
+        f"(node[\"shop\"=\"convenience\"]{bbox};"
+        f"node[\"amenity\"=\"convenience\"]{bbox};"
+        f"node[\"highway\"=\"services\"][\"name\"~\"道の駅\"]{bbox};"
+        f"node[\"amenity\"=\"vending_machine\"][\"vending\"=\"drinks\"]{bbox};"
+        f");out body;"
+    )
+
+POI_TYPE_MAP = {
+    "convenience": "convenience",
+    "rest_area": "rest_area",
+    "vending_machine": "vending_machine",
+}
+
+
+def _poi_type(tags: dict) -> str:
+    if tags.get("amenity") in ("convenience",) or tags.get("shop") == "convenience":
+        return "convenience"
+    if tags.get("highway") in ("rest_area", "services"):
+        return "rest_area"
+    if tags.get("amenity") == "vending_machine":
+        return "vending_machine"
+    return "other"
+
+
+@app.route("/pois", methods=["POST"])
+def get_pois():
+    payload = request.get_json(force=True)
+    points = payload.get("points", [])
+    if not points:
+        return jsonify({"error": "ポイントデータが必要です"}), 400
+
+    lats = [p["lat"] for p in points]
+    lons = [p["lon"] for p in points]
+    south, north = min(lats) - 0.005, max(lats) + 0.005
+    west,  east  = min(lons) - 0.005, max(lons) + 0.005
+
+    # 広いルートを TILE_SIZE° グリッドに分割
+    import math
+    lat_tiles = math.ceil((north - south) / TILE_SIZE)
+    lon_tiles = math.ceil((east - west) / TILE_SIZE)
+    tiles: list[tuple[float, float, float, float]] = []
+    for i in range(lat_tiles):
+        for j in range(lon_tiles):
+            s = south + i * TILE_SIZE
+            n = min(s + TILE_SIZE, north)
+            w = west + j * TILE_SIZE
+            e = min(w + TILE_SIZE, east)
+            tiles.append((s, n, w, e))
+
+    async def _fetch_tile(session: aiohttp.ClientSession, sem: asyncio.Semaphore,
+                          s: float, n: float, w: float, e: float) -> list:
+        bbox = f"({s:.6f},{w:.6f},{n:.6f},{e:.6f})"
+        q = _poi_query(bbox)
+        async with sem:
+            for endpoint in OVERPASS_ENDPOINTS:
+                try:
+                    async with session.post(
+                        endpoint,
+                        data={"data": q},
+                        timeout=aiohttp.ClientTimeout(total=25),
+                    ) as resp:
+                        body = await resp.read()
+                        if body.lstrip().startswith(b"{"):
+                            return json.loads(body).get("elements", [])
+                except Exception:
+                    pass
+        return []
+
+    async def _fetch_all(tiles):
+        sem = asyncio.Semaphore(3)
+        headers = {"User-Agent": "charinko_tools/1.0"}
+        async with aiohttp.ClientSession(headers=headers) as session:
+            results = await asyncio.gather(*[_fetch_tile(session, sem, *t) for t in tiles])
+        return [el for batch in results for el in batch]
+
+    elements = asyncio.run(_fetch_all(tiles))
+
+    route_coords = [(p["lat"], p["lon"]) for p in points]
+    MAX_DIST_M = 1000
+    # 1°≈111km なので 0.01°≈1.1km。粗いbboxで事前フィルタして haversine 呼び出しを減らす
+    DEG_MARGIN = MAX_DIST_M / 111_000
+
+    def near_route(lat: float, lon: float) -> bool:
+        return any(
+            abs(rlat - lat) <= DEG_MARGIN and abs(rlon - lon) <= DEG_MARGIN * 1.5
+            and haversine_m(lat, lon, rlat, rlon) <= MAX_DIST_M
+            for rlat, rlon in route_coords
+        )
+
+    seen: set[int] = set()
+    pois = []
+    for el in elements:
+        if el.get("id") in seen:
+            continue
+        seen.add(el["id"])
+        if not near_route(el["lat"], el["lon"]):
+            continue
+        tags = el.get("tags", {})
+        poi_type = _poi_type(tags)
+        if poi_type == "rest_area":
+            continue  # 道の駅は国土数値情報から取得
+        name = tags.get("name") or tags.get("name:ja") or ""
+        pois.append({"lat": el["lat"], "lon": el["lon"], "type": poi_type, "name": name})
+
+    # 道の駅：国土数値情報（国交省）から取得
+    for station in _load_michinoeki():
+        if near_route(station["lat"], station["lon"]):
+            pois.append(station)
+
+    return jsonify({"pois": pois})
 
 
 if __name__ == "__main__":

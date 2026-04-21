@@ -116,6 +116,17 @@ input[type="file"] { display: none; }
 #gradient-btn.active { background: #ff6f00; color: #fff; border-color: #ff6f00; }
 #climb-btn.active { background: #6a1b9a; color: #fff; border-color: #6a1b9a; }
 #time-btn.active { background: #00695c; color: #fff; border-color: #00695c; }
+#poi-btn.active  { background: #e65100; color: #fff; border-color: #e65100; }
+.poi-marker {
+  display: flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; border-radius: 50%;
+  font-size: 13px; border: 2px solid #fff;
+  box-shadow: 0 1px 4px rgba(0,0,0,.4);
+  cursor: pointer;
+}
+.poi-marker.convenience  { background: #1565c0; }
+.poi-marker.rest_area    { background: #2e7d32; }
+.poi-marker.vending_machine { background: #e65100; }
 #time-settings {
   display: none; align-items: center; gap: 8px;
   padding: 4px 12px; background: #e8f5e9; border-bottom: 1px solid #c8e6c9;
@@ -436,6 +447,7 @@ input[type="file"] { display: none; }
     <button class="sm-btn" id="gradient-btn" onclick="toggleGradient()" title="勾配をマップ・グラフに表示">📐 勾配</button>
     <button class="sm-btn" id="climb-btn" onclick="toggleClimbs()" title="登坂区間のキツさ指数を表示">🏔 峠</button>
     <button class="sm-btn" id="time-btn" onclick="toggleTimeMode()" title="時間帯可視化">🕐 時間帯</button>
+    <button class="sm-btn" id="poi-btn" onclick="togglePoi()" title="補給ポイント（コンビニ・道の駅・自動販売機）">🏪 補給</button>
     <div id="time-legend">
       <span style="font-size:10px;font-weight:600;color:#555">時間帯:</span>
       <div class="tl-item"><div class="tl-swatch" style="background:#ffb300"></div>日中</div>
@@ -622,6 +634,8 @@ let climbLayers         = [];
 let climbSegments       = [];
 let timeVisible         = false;
 let timeLayers          = [];
+let poiVisible          = false;
+let poiLayers           = [];
 
 let map, chart;
 let routeLayer    = null;
@@ -1453,6 +1467,63 @@ function calcTimeBand() {
   window._passTimes = passTimes;
 }
 
+// ── POI visualization ────────────────────────────────────────────
+const POI_META = {
+  convenience:     { icon: '🏪', label: 'コンビニ',   cls: 'convenience' },
+  rest_area:       { icon: '🏠', label: '道の駅',     cls: 'rest_area' },
+  vending_machine: { icon: '🥤', label: '自販機',     cls: 'vending_machine' },
+};
+
+function clearPoiLayers() {
+  poiLayers.forEach(l => map.removeLayer(l));
+  poiLayers = [];
+}
+
+async function loadPois() {
+  if (!analysisData) return;
+  clearPoiLayers();
+  setStatus('補給ポイントを取得中...');
+  try {
+    const res = await fetch('/pois', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ points: analysisData.points }),
+    });
+    const data = await res.json();
+    if (data.error) { setStatus('補給ポイント取得エラー: ' + data.error); return; }
+
+    data.pois.forEach(poi => {
+      const meta = POI_META[poi.type] || { icon: '📍', label: poi.type, cls: '' };
+      const el = document.createElement('div');
+      el.className = `poi-marker ${meta.cls}`;
+      el.textContent = meta.icon;
+      el.title = poi.name ? `${meta.label}: ${poi.name}` : meta.label;
+
+      const marker = L.marker([poi.lat, poi.lon], {
+        icon: L.divIcon({ html: el.outerHTML, className: '', iconSize: [22, 22], iconAnchor: [11, 11] }),
+      });
+      marker.bindPopup(`<b>${meta.icon} ${meta.label}</b>${poi.name ? '<br>' + poi.name : ''}`);
+      marker.addTo(map);
+      poiLayers.push(marker);
+    });
+    setStatus(`補給ポイント ${data.pois.length} 件を表示`);
+  } catch (e) {
+    setStatus('補給ポイント取得エラー: ' + e.message);
+  }
+}
+
+async function togglePoi() {
+  if (!analysisData) return;
+  poiVisible = !poiVisible;
+  document.getElementById('poi-btn').classList.toggle('active', poiVisible);
+  if (poiVisible) {
+    await loadPois();
+  } else {
+    clearPoiLayers();
+    setStatus('補給ポイント非表示');
+  }
+}
+
 // ── Gradient visualization ───────────────────────────────────────
 function gradientColor(pct) {
   if (pct >= 12) return '#c62828';
@@ -1672,6 +1743,9 @@ async function doAnalyze() {
     gpxKey = files.map(f => f.name.replace(/\.gpx$/i, '')).join('+');
 
     annotations = [];
+    clearPoiLayers();
+    poiVisible = false;
+    document.getElementById('poi-btn').classList.remove('active');
     renderMap(json);
     buildChart(json.points);
     await loadAnnotations();
